@@ -8,6 +8,7 @@ import {
   generateRandomStealthMetaAddress,
   generateStealthAddress,
   computeStealthKey,
+  checkStealthAddress,
 } from "@scopelift/stealth-address-sdk";
 
 // --------------------------------------------------
@@ -16,6 +17,10 @@ import {
 
 const SCHEME_ID = 1;
 const SEPOLIA_CHAIN_ID = 11155111n;
+console.log(
+  "ERC-5564 Announcer:",
+  ERC5564_CONTRACT_ADDRESS
+);
 
 const STORAGE_KEY = "stealth_b_identity";
 
@@ -534,146 +539,253 @@ function App() {
   // --------------------------------------------------
 
   const checkPayment = async () => {
-    try {
-      clearStatus();
-      setPaymentInfo(null);
-      setClaimTxHash("");
+  try {
+    clearStatus();
+    setPaymentInfo(null);
+    setClaimTxHash("");
 
-      requireWallet();
-      setChecking(true);
+    requireWallet();
+    setChecking(true);
 
-      const provider = getProvider();
-      await ensureSepolia(provider);
+    const provider = getProvider();
+    await ensureSepolia(provider);
 
-      const identity = getSavedIdentity();
+    const identity = getSavedIdentity();
 
-      // The SDK uses the canonical Sepolia ERC-5564 Announcer.
-      const stealthClient = getStealthClient();
+    const latestBlock = BigInt(
+      await provider.getBlockNumber()
+    );
 
-      // Do not scan the entire Sepolia chain on every click. The previous
-      // implementation started at the ERC-5564 deployment block (5,486,597),
-      // which makes a public RPC scan unnecessarily slow. For discovery we
-      // scan recent blocks in bounded chunks, newest first. This is ideal for
-      // our live test and keeps each RPC request manageable.
-      const latestBlock = BigInt(await provider.getBlockNumber());
-      const deploymentBlock = 5486597n;
-      const chunkSize = 20_000n;
-      const maxRecentBlocks = 200_000n;
+    const deploymentBlock = 5486597n;
+    const chunkSize = 10_000n;
+    const maxRecentBlocks = 200_000n;
 
-      let scanTo = latestBlock;
-      const minimumBlock = latestBlock > maxRecentBlocks
+    const minimumBlock =
+      latestBlock > maxRecentBlocks
         ? latestBlock - maxRecentBlocks + 1n
         : deploymentBlock;
-      const allAnnouncements = [];
-      let matchingAnnouncements = [];
 
-      while (scanTo >= minimumBlock) {
-        const scanFrom = scanTo - chunkSize + 1n > minimumBlock
+    setMessage(
+      `Preparing ERC-5564 scan from block ${minimumBlock} to ${latestBlock}...`
+    );
+
+    const announcementInterface = new ethers.Interface([
+      "event Announcement(uint256 indexed schemeId,address indexed stealthAddress,address indexed caller,bytes ephemeralPubKey,bytes metadata)"
+    ]);
+
+    const announcementTopic = ethers.id(
+      "Announcement(uint256,address,address,bytes,bytes)"
+    );
+
+    let scanTo = latestBlock;
+    let scannedCount = 0;
+
+    while (scanTo >= minimumBlock) {
+      const scanFrom =
+        scanTo - chunkSize + 1n > minimumBlock
           ? scanTo - chunkSize + 1n
           : minimumBlock;
 
-        setMessage(
-          `Scanning ERC-5564 announcements (blocks ${scanFrom.toString()}–${scanTo.toString()})...`
-        );
+      setMessage(
+        `Scanning ERC-5564 announcements (blocks ${scanFrom}–${scanTo})...`
+      );
 
-        const chunk = await stealthClient.getAnnouncements({
-          ERC5564Address: ERC5564_CONTRACT_ADDRESS,
-          args: {
-            schemeId: BigInt(SCHEME_ID),
-          },
-          fromBlock: scanFrom,
-          toBlock: scanTo,
-        });
-
-        allAnnouncements.push(...chunk);
-        setAnnouncementCount(allAnnouncements.length);
-
-        if (chunk.length > 0) {
-          matchingAnnouncements = await stealthClient.getAnnouncementsForUser({
-            announcements: chunk,
-            spendingPublicKey: identity.spendingPublicKey,
-            viewingPrivateKey: identity.viewingPrivateKey,
-          });
-
-          if (matchingAnnouncements.length > 0) {
-            break;
-          }
-        }
-
-        if (scanFrom === minimumBlock) break;
-        scanTo = scanFrom - 1n;
-      }
-
-      if (matchingAnnouncements.length === 0) {
-        throw new Error(
-          "No recent ERC-5564 payment belonging to this Bears identity was found. " +
-          "The scanner checked the latest 200,000 Sepolia blocks."
-        );
-      }
-
-      // The scan runs newest-first, so the first matching announcement is the
-      // newest matching payment in the chunk that was found.
-      const announcement = matchingAnnouncements[matchingAnnouncements.length - 1];
-      const stealthAddress = announcement.stealthAddress;
-      const announcementEphemeralPublicKey =
-        announcement.ephemeralPublicKey ?? announcement.ephemeralPubKey;
-
-      if (!announcementEphemeralPublicKey) {
-        throw new Error("The ERC-5564 announcement is missing its ephemeral public key.");
-      }
-
-      setMessage("Payment announcement found. Checking stealth-address balance...");
-
-      const balance = await provider.getBalance(stealthAddress);
-      const amount = ethers.formatEther(balance);
-
-      const claimed = balance === 0n;
-
-      let derivedAddress = "";
-      let stealthPrivateKey = "";
-
-      if (!claimed) {
-        stealthPrivateKey = computeStealthKey({
-          ephemeralPublicKey: announcementEphemeralPublicKey,
-          schemeId: SCHEME_ID,
-          spendingPrivateKey: identity.spendingPrivateKey,
-          viewingPrivateKey: identity.viewingPrivateKey,
-        });
-
-        const derivedWallet = new ethers.Wallet(stealthPrivateKey);
-        derivedAddress = derivedWallet.address;
-
-        if (derivedAddress.toLowerCase() !== stealthAddress.toLowerCase()) {
-          throw new Error(
-            "The derived stealth address does not match the ERC-5564 announcement."
-          );
-        }
-      }
-
-      setPaymentInfo({
-        stealthAddress,
-        amount,
-        claimed,
-        ephemeralPublicKey: announcementEphemeralPublicKey,
-        metadata: announcement.metadata,
-        announcementTransactionHash: announcement.transactionHash,
-        announcementBlockNumber: announcement.blockNumber?.toString(),
-        derivedAddress,
-        belongsToB: true,
+      const logs = await provider.getLogs({
+        address: ERC5564_CONTRACT_ADDRESS,
+        fromBlock: Number(scanFrom),
+        toBlock: Number(scanTo),
+        topics: [announcementTopic],
       });
 
-      setMessage(
-        claimed
-          ? "A matching stealth address was found, but it currently has no ETH."
-          : "Payment found and verified as belonging to your Bears identity."
+      scannedCount += logs.length;
+      setAnnouncementCount(scannedCount);
+
+      console.log(
+        `ERC-5564 scan ${scanFrom}-${scanTo}:`,
+        logs.length,
+        "announcement(s)"
       );
-    } catch (err) {
-      console.error("SCAN ERROR:", err);
-      setError(err?.shortMessage || err?.message || String(err));
-    } finally {
-      setChecking(false);
+
+      if (logs.length > 0) {
+        console.log("ERC-5564 raw logs:", logs);
+
+        for (const log of logs) {
+          let parsed;
+
+          try {
+            parsed =
+              announcementInterface.parseLog({
+                topics: log.topics,
+                data: log.data,
+              });
+          } catch (parseError) {
+            console.error(
+              "Could not parse announcement:",
+              parseError
+            );
+            continue;
+          }
+
+          if (!parsed) {
+            continue;
+          }
+
+          const schemeId =
+            BigInt(parsed.args.schemeId);
+
+          if (schemeId !== BigInt(SCHEME_ID)) {
+            continue;
+          }
+
+          const stealthAddress =
+            parsed.args.stealthAddress;
+
+          const ephemeralPublicKey =
+            parsed.args.ephemeralPubKey;
+
+          const metadata =
+            parsed.args.metadata;
+
+          console.log(
+            "Parsed ERC-5564 announcement:",
+            {
+              schemeId: schemeId.toString(),
+              stealthAddress,
+              ephemeralPublicKey,
+              metadata,
+              transactionHash: log.transactionHash,
+              blockNumber: log.blockNumber,
+            }
+          );
+
+          // The first byte of metadata is the ERC-5564 view tag.
+          const viewTag = metadata.slice(0, 4);
+
+          let belongsToUser = false;
+
+          try {
+            belongsToUser = checkStealthAddress({
+              ephemeralPublicKey,
+              schemeId: SCHEME_ID,
+              spendingPublicKey:
+                identity.spendingPublicKey,
+              userStealthAddress:
+                stealthAddress,
+              viewingPrivateKey:
+                identity.viewingPrivateKey,
+              viewTag,
+            });
+          } catch (checkError) {
+            console.error(
+              "Stealth ownership check failed:",
+              checkError
+            );
+            continue;
+          }
+
+          console.log(
+            "Belongs to Bears identity:",
+            belongsToUser
+          );
+
+          if (!belongsToUser) {
+            continue;
+          }
+
+          setMessage(
+            "Payment announcement found. Checking stealth-address balance..."
+          );
+
+          const balance =
+            await provider.getBalance(
+              stealthAddress
+            );
+
+          const amount =
+            ethers.formatEther(balance);
+
+          const claimed =
+            balance === 0n;
+
+          let derivedAddress = "";
+          let stealthPrivateKey = "";
+
+          if (!claimed) {
+            stealthPrivateKey =
+              computeStealthKey({
+                ephemeralPublicKey,
+                schemeId: SCHEME_ID,
+                spendingPrivateKey:
+                  identity.spendingPrivateKey,
+                viewingPrivateKey:
+                  identity.viewingPrivateKey,
+              });
+
+            const derivedWallet =
+              new ethers.Wallet(
+                stealthPrivateKey
+              );
+
+            derivedAddress =
+              derivedWallet.address;
+
+            if (
+              derivedAddress.toLowerCase() !==
+              stealthAddress.toLowerCase()
+            ) {
+              throw new Error(
+                "The derived stealth address does not match the ERC-5564 announcement."
+              );
+            }
+          }
+
+          setPaymentInfo({
+            stealthAddress,
+            amount,
+            claimed,
+            ephemeralPublicKey,
+            metadata,
+            announcementTransactionHash:
+              log.transactionHash,
+            announcementBlockNumber:
+              log.blockNumber?.toString(),
+            derivedAddress,
+            belongsToB: true,
+          });
+
+          setMessage(
+            claimed
+              ? "A matching stealth address was found, but it currently has no ETH."
+              : "Payment found and verified as belonging to your Bears identity."
+          );
+
+          return;
+        }
+      }
+
+      if (scanFrom === minimumBlock) {
+        break;
+      }
+
+      scanTo = scanFrom - 1n;
     }
-  };
+
+    throw new Error(
+      `No recent ERC-5564 payment belonging to this Bears identity was found. The scanner found ${scannedCount} ERC-5564 announcement(s).`
+    );
+
+  } catch (err) {
+    console.error("SCAN ERROR:", err);
+
+    setError(
+      err?.shortMessage ||
+      err?.message ||
+      String(err)
+    );
+  } finally {
+    setChecking(false);
+  }
+};
 
   // --------------------------------------------------
   // CLAIM / SPEND FROM STEALTH ADDRESS
