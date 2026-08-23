@@ -12,13 +12,13 @@ Built for "Road to Devcon — NITK Surathkal Hackathon" · Track: 'Private Walle
 
 
 
-!\[Ethereum](https://img.shields.io/badge/Ethereum-Sepolia-8A92B2?logo=ethereum\&logoColor=white)
+\[Ethereum](https://img.shields.io/badge/Ethereum-Sepolia-8A92B2?logo=ethereum\&logoColor=white)
 
-!\[ERC-5564](https://img.shields.io/badge/Standard-ERC--5564-67e8f9)
+\[ERC-5564](https://img.shields.io/badge/Standard-ERC--5564-67e8f9)
 
-!\[React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61dafb?logo=react)
+\[React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61dafb?logo=react)
 
-!\[License](https://img.shields.io/badge/License-MIT-green)
+\[License](https://img.shields.io/badge/License-MIT-green)
 
 
 
@@ -114,13 +114,13 @@ Deployed contract addresses (Sepolia):
 
 
 
-| !\[screenshot](docs/screenshots/home.png) | !\[screenshot](docs/screenshots/send.png) |
+|\[screenshot]( docs/screenshots/home.png ) |\[screenshot]( docs/screenshots/send.png ) |
 
-| !\[screenshot](docs/screenshots/receive.png) | |
+|\[screenshot]( docs/screenshots/receive.png ) | |
 
 
 
-\## 🚀 Running Locally
+🚀 Running Locally
 
 
 
